@@ -47,14 +47,21 @@ HISTORY = os.path.join(DATA_DIR, 'used_ips.json')
 LOG_FILE = os.path.join(DATA_DIR, 'ip_log.txt')
 CURRENT_FILE = os.path.join(DATA_DIR, 'current_ip.txt')
 
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.1.0'
 
 CONTROL_HOST, CONTROL_PORT = '127.0.0.1', 9051
 SOCKS_HOST, SOCKS_PORT = '127.0.0.1', 9050
 CIRCUIT_WAIT = 10    # seconds for Tor to build fresh circuits after NEWNYM
 MAX_ATTEMPTS = 8     # NEWNYM attempts per cycle before failing this cycle fast
 INTERVAL_CHOICES = [1, 5, 10, 15, 30, 45, 60, 90, 120]
-IP_SERVICES = [
+# Geo services return the exit IP AND its country in one response
+GEO_SERVICES = [
+    ('https://get.geojs.io/v1/ip/geo.json', 'geojs'),
+    ('https://ipwho.is/', 'ipwho'),
+    ('https://ipapi.co/json/', 'ipapi'),
+]
+# Plain IP-only fallbacks (country unknown) if every geo service fails
+PLAIN_SERVICES = [
     'https://check.torproject.org/api/ip',
     'https://api.ipify.org/?format=json',
     'https://ifconfig.me/ip',
@@ -81,6 +88,8 @@ STOP_EVENT = threading.Event()
 CHANGE_NOW_EVENT = threading.Event()
 ENABLED = True
 DEFAULT_IP = None
+CURRENT_COUNTRY = None
+DEFAULT_COUNTRY = None
 TOR_STOPPED_FOR_DISABLE = False
 
 # ----------------------------------------------------------------------------
@@ -230,49 +239,93 @@ def extract_ip(body):
     except OSError:
         return None
 
-def get_default_ip():
-    # The machine's normal (non-Tor) public IP, fetched DIRECTLY - never via SOCKS
-    for round_no in range(2):
-        for host in ['api.ipify.org', 'ifconfig.me', 'check.torproject.org']:
-            raw = None
-            try:
-                raw = socket.create_connection((host, 443), timeout=6)
-                tls = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
-                tls.sendall(('GET / HTTP/1.0\r\nHost: ' + host +
-                             '\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n').encode())
-                chunks = []
-                while True:
-                    data = tls.recv(4096)
-                    if not data:
-                        break
-                    chunks.append(data)
-                ip = extract_ip(b''.join(chunks).decode('utf-8', 'replace').split('\r\n\r\n', 1)[1])
-                if ip:
-                    return ip
-            except Exception as e:
-                log('  default-IP check via ' + host + ' failed: ' + str(e))
-            finally:
-                if raw is not None:
-                    try:
-                        raw.close()
-                    except OSError:
-                        pass
-        time.sleep(3)
-    return None
+def parse_geo(body, kind):
+    # Returns (ip, country_name) from a geo service's JSON, or (None, None)
+    try:
+        data = json.loads(body)
+    except Exception:
+        return None, None
+    if kind == 'geojs':
+        ip, country = data.get('ip'), data.get('country') or data.get('country_code')
+    elif kind == 'ipapi':
+        ip, country = data.get('ip'), data.get('country_name') or data.get('country_code')
+    elif kind == 'ipwho':
+        if data.get('success') is False:
+            return None, None
+        ip, country = data.get('ip'), data.get('country')
+    else:
+        return None, None
+    if ip:
+        try:
+            socket.inet_aton(ip)
+        except OSError:
+            return None, None
+    return ip, (country.strip() if isinstance(country, str) and country.strip() else None)
 
-def get_current_ip():
-    # Real exit IP as seen by the internet; fail fast: short timeouts,
-    # quick fallbacks, only 2 rounds before giving up this attempt
+def get_current_ip_country():
+    # Real exit IP + its country, as seen through Tor; fail fast: short
+    # timeouts, quick fallbacks, only 2 rounds before giving up this attempt
     for round_no in range(2):
-        for url in IP_SERVICES:
+        for url, kind in GEO_SERVICES:
+            try:
+                ip, country = parse_geo(http_get_via_socks(url), kind)
+                if ip:
+                    return ip, country
+            except Exception as e:
+                log('  geo check via ' + url.split('/')[2] + ' failed: ' + str(e))
+        for url in PLAIN_SERVICES:
             try:
                 ip = extract_ip(http_get_via_socks(url))
                 if ip:
-                    return ip
+                    return ip, None
             except Exception as e:
                 log('  IP check via ' + url.split('/')[2] + ' failed: ' + str(e))
         time.sleep(3)
-    return None
+    return None, None
+
+def http_get_direct(url, timeout=6):
+    rest = url.split('://', 1)[1]
+    hostname, path = rest.split('/', 1)
+    path = '/' + path
+    raw = socket.create_connection((hostname, 443), timeout=timeout)
+    try:
+        tls = ssl.create_default_context().wrap_socket(raw, server_hostname=hostname)
+        req = ('GET ' + path + ' HTTP/1.0\r\nHost: ' + hostname +
+               '\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n')
+        tls.sendall(req.encode())
+        chunks = []
+        while True:
+            data = tls.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        body = b''.join(chunks).decode('utf-8', 'replace')
+        return body.split('\r\n\r\n', 1)[1] if '\r\n\r\n' in body else ''
+    finally:
+        try:
+            raw.close()
+        except OSError:
+            pass
+
+def get_default_ip_country():
+    # The machine's normal (non-Tor) public IP + country, fetched DIRECTLY
+    for round_no in range(2):
+        for url, kind in [('https://get.geojs.io/v1/ip/geo.json', 'geojs'),
+                          ('https://ipwho.is/', 'ipwho')]:
+            try:
+                ip, country = parse_geo(http_get_direct(url), kind)
+                if ip:
+                    return ip, country
+            except Exception as e:
+                log('  default-IP check via ' + url.split('/')[2] + ' failed: ' + str(e))
+        try:
+            ip = extract_ip(http_get_direct('https://api.ipify.org/?format=json'))
+            if ip:
+                return ip, None
+        except Exception as e:
+            log('  default-IP check via api.ipify.org failed: ' + str(e))
+        time.sleep(3)
+    return None, None
 
 # ----------------------------------------------------------------------------
 # Tor supervision - fail fast, kill what is not fully working
@@ -377,7 +430,7 @@ def rotate_until_new(icon):
             time.sleep(10)
             continue
         time.sleep(CIRCUIT_WAIT)
-        ip = get_current_ip()
+        ip, country = get_current_ip_country()
         if ip is None:
             log('  attempt ' + str(attempt) + ': could not read current IP; retrying')
             continue
@@ -387,6 +440,8 @@ def rotate_until_new(icon):
             continue
         USED.add(ip)
         save_history()
+        global CURRENT_COUNTRY
+        CURRENT_COUNTRY = country
         return ip
     return None
 
@@ -514,8 +569,8 @@ def _status_text():
 
 def _ip_text():
     if ENABLED:
-        return 'Current IP: ' + (CURRENT_IP or 'checking...')
-    return 'Default IP: ' + (DEFAULT_IP or 'checking...')
+        return 'Current IP: ' + (CURRENT_IP or 'checking...') + (' (' + CURRENT_COUNTRY + ')' if CURRENT_COUNTRY else '')
+    return 'Default IP: ' + (DEFAULT_IP or 'checking...') + (' (' + DEFAULT_COUNTRY + ')' if DEFAULT_COUNTRY else '')
 
 def _next_change_text():
     if NEXT_CHANGE_TS is None:
@@ -536,6 +591,7 @@ def interruptible_sleep(seconds):
 
 def worker(icon):
     global CURRENT_IP, NEXT_CHANGE_TS, INTERVAL_MIN, DEFAULT_IP, ENABLED, TOR_STOPPED_FOR_DISABLE
+    global CURRENT_COUNTRY, DEFAULT_COUNTRY
     settings = load_settings()
     INTERVAL_MIN = settings['interval_minutes']
     ENABLED = settings['enabled']  # honor the persisted state at startup
@@ -551,10 +607,11 @@ def worker(icon):
                 CURRENT_IP = None
                 NEXT_CHANGE_TS = None
                 _notify(icon, 'Rotation off - using your default IP', 'Auto IP Changer disabled')
-            ip = get_default_ip()
+            ip, ctry = get_default_ip_country()
             if ip:
                 DEFAULT_IP = ip
-                log('Default IP: ' + ip + ' (Tor rotation is off)')
+                DEFAULT_COUNTRY = ctry
+                log('Default IP: ' + ip + (' (' + ctry + ')' if ctry else '') + ' (Tor rotation is off)')
             update_title(icon)
             try:
                 with open(CURRENT_FILE, 'w') as f:
@@ -572,13 +629,16 @@ def worker(icon):
             ensure_tor()
             if CURRENT_IP is None:
                 # Startup: report the IP we woke up with, unless it was used before
-                first = get_current_ip()
+                first, first_country = get_current_ip_country()
                 if first is not None and first not in USED:
                     USED.add(first)
                     save_history()
                     CURRENT_IP = first
-                    log('Current exit IP: ' + first + ' (fresh - never used before)')
-                    _notify(icon, 'Current IP: ' + first, 'Auto IP Changer started')
+                    CURRENT_COUNTRY = first_country
+                    log('Current exit IP: ' + first + (' (' + first_country + ')' if first_country else '') +
+                        ' (fresh - never used before)')
+                    _notify(icon, 'Current IP: ' + first +
+                            (' (' + first_country + ')' if first_country else ''), 'Auto IP Changer started')
                 elif first is not None:
                     log('Startup IP ' + first + ' was used before; rotating now')
                 update_title(icon)
@@ -589,8 +649,11 @@ def worker(icon):
                 NEXT_CHANGE_TS = target
                 update_title(icon)
                 log('IP CHANGED: ' + str(old) + ' -> ' + new_ip +
-                    '  (fresh IP #' + str(len(USED)) + ' in history)')
-                _notify(icon, 'New IP: ' + new_ip, 'IP changed (#' + str(len(USED)) + ' fresh IPs used)')
+                    (' (' + CURRENT_COUNTRY + ')' if CURRENT_COUNTRY else '') +
+                    '  [fresh IP #' + str(len(USED)) + ' in history]')
+                _notify(icon, 'New IP: ' + new_ip +
+                        (' (' + CURRENT_COUNTRY + ')' if CURRENT_COUNTRY else ''),
+                        'IP changed (#' + str(len(USED)) + ' fresh IPs used)')
             elif not ENABLED:
                 continue
             else:

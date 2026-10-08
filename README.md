@@ -21,6 +21,7 @@
 ## ✨ What it does
 
 - **Rotates your exit IP automatically** every X minutes (default 30, your choice from the tray menu).
+- **Shows your IP + country in real time** 🌍: the tray tooltip reads `Auto IP Changer v1.1.0 - IP 185.220.101.15 (Sweden) - next change in 12:34`, and the menu shows `Current IP: ... (country)` — country comes from live geo lookup of every exit IP.
 - **Never reuses an IP.** Every new exit IP is verified live and checked against a persistent history file — if Tor offers one you've had before, it rotates again until it gets a genuinely new one.
 - **Lives in your system tray.** No terminal windows, ever. The icon shows a purple onion with a rotation arrow, and hovering it displays:
   ```
@@ -45,7 +46,7 @@ Grab **`AutoIpChanger.exe`** from the [**Releases**](https://github.com/Michaelu
    It downloads the official [Tor Expert Bundle](https://archive.torproject.org/tor-package-archive/torbrowser/13.5.6/), writes a BOM-free `torrc`, and starts rotating.
 
 2. **Run the tray app**: launch `AutoIpChanger.exe`. That's it — an onion appears in your tray.
-   - **Hover** → current IP + countdown to the next change (or your default IP while disabled)
+   - **Hover** → current IP + its country + countdown to the next change (or your default IP while disabled)
    - **Right-click → Disable (use my default IP)** → pause rotation; the tray shows your default IP until you re-enable
    - **Right-click → Change IP now** → immediate rotation
    - **Right-click → Interval** → pick 1 / 5 / 10 / 15 / 30 / 45 / 60 / 90 / 120 minutes
@@ -85,7 +86,7 @@ python -m PyInstaller --onefile --noconsole --icon=tor_rotator.ico --name AutoIp
 
 | File | Purpose |
 |---|---|
-| `used_ips.json` | Every IP ever used — the never-reuse guarantee |
+| `used_ips.json` | Every IP ever used — the never-reuse guarantee (46+ and counting) |
 | `current_ip.txt` | Your current IP, updated continuously |
 | `ip_log.txt` | Timestamped log of every rotation and event |
 | `settings.json` | `{"interval_minutes": 30, "enabled": true}` — editable live, applies next cycle |
