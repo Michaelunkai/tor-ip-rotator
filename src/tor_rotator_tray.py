@@ -47,7 +47,7 @@ HISTORY = os.path.join(DATA_DIR, 'used_ips.json')
 LOG_FILE = os.path.join(DATA_DIR, 'ip_log.txt')
 CURRENT_FILE = os.path.join(DATA_DIR, 'current_ip.txt')
 
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
 
 CONTROL_HOST, CONTROL_PORT = '127.0.0.1', 9051
 SOCKS_HOST, SOCKS_PORT = '127.0.0.1', 9050
@@ -594,8 +594,14 @@ def worker(icon):
     global CURRENT_COUNTRY, DEFAULT_COUNTRY
     settings = load_settings()
     INTERVAL_MIN = settings['interval_minutes']
-    ENABLED = settings['enabled']  # honor the persisted state at startup
+    # SAFETY DEFAULT: every launch starts DISABLED, no matter what the
+    # settings file says - rotation only runs after an explicit
+    # "Enable IP rotation" click in the tray menu, so starting the exe
+    # never silently begins routing traffic through Tor.
+    ENABLED = False
+    TOR_STOPPED_FOR_DISABLE = False
     log('=== Auto IP Changer v' + APP_VERSION + ' (tray) started ===')
+    log('Started DISABLED (safe default): using the default IP - enable rotation from the tray menu.')
     log('Never-reuse history loaded: ' + str(len(USED)) + ' IP(s) that will never be handed out again')
     update_title(icon)
     while not STOP_EVENT.is_set():

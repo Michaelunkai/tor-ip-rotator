@@ -28,6 +28,7 @@
   Auto IP Changer - IP 185.220.101.15 - next change in 12:34
   ```
 - **Tells you everything**: toast notifications on every IP change, `current_ip.txt` always holds the current IP, and `ip_log.txt` keeps a timestamped history of every rotation.
+- **Always starts disabled** 🛑: every launch begins safely on your **default IP** (Tor not running), no matter what the settings say — rotation only runs after you explicitly click *Enable IP rotation* in the tray menu.
 - **One-click Disable** 🛑: right-click → *Disable (use my default IP)* stops rotation, shuts Tor down, and shows your **default public IP** in the tooltip, tray menu and `current_ip.txt` for as long as it's off. *Enable IP rotation* brings everything back with a fresh never-used IP.
 - **Fails fast, self-heals**: short timeouts everywhere, verifies Tor's actual control-port replies, kills and restarts Tor if it stops working, retries failed cycles within seconds — the main loop cannot die.
 - **Fights for your privacy baseline**: SOCKS5 on `127.0.0.1:9050`, ControlPort on `127.0.0.1:9051` — local only.
@@ -45,7 +46,7 @@ Grab **`AutoIpChanger.exe`** from the [**Releases**](https://github.com/Michaelu
    ```
    It downloads the official [Tor Expert Bundle](https://archive.torproject.org/tor-package-archive/torbrowser/13.5.6/), writes a BOM-free `torrc`, and starts rotating.
 
-2. **Run the tray app**: launch `AutoIpChanger.exe`. That's it — an onion appears in your tray.
+2. **Run the tray app**: launch `AutoIpChanger.exe`. An onion appears in your tray, **started disabled** (safety default) — click *Enable IP rotation* in the menu when you want rotation to begin.
    - **Hover** → current IP + its country + countdown to the next change (or your default IP while disabled)
    - **Right-click → Disable (use my default IP)** → pause rotation; the tray shows your default IP until you re-enable
    - **Right-click → Change IP now** → immediate rotation
