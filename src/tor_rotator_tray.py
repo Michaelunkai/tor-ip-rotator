@@ -528,7 +528,14 @@ def main():
     USED = load_history()
     icon = pystray.Icon('AutoIpChanger', draw_icon(256), 'Auto IP Changer - starting...',
                         build_menu())
-    icon.run(setup=lambda ic: threading.Thread(target=worker, args=(ic,), daemon=True).start())
+
+    def setup(ic):
+        # A custom setup handler replaces pystray's default one, which is what
+        # normally makes the icon visible - so show it explicitly, then work
+        ic.visible = True
+        threading.Thread(target=worker, args=(ic,), daemon=True).start()
+
+    icon.run(setup=setup)
 
 if __name__ == '__main__':
     main()
