@@ -47,6 +47,8 @@ HISTORY = os.path.join(DATA_DIR, 'used_ips.json')
 LOG_FILE = os.path.join(DATA_DIR, 'ip_log.txt')
 CURRENT_FILE = os.path.join(DATA_DIR, 'current_ip.txt')
 
+APP_VERSION = '1.0.0'
+
 CONTROL_HOST, CONTROL_PORT = '127.0.0.1', 9051
 SOCKS_HOST, SOCKS_PORT = '127.0.0.1', 9050
 CIRCUIT_WAIT = 10    # seconds for Tor to build fresh circuits after NEWNYM
@@ -77,6 +79,9 @@ INTERVAL_MIN = 30
 TOR_PROC = None
 STOP_EVENT = threading.Event()
 CHANGE_NOW_EVENT = threading.Event()
+ENABLED = True
+DEFAULT_IP = None
+TOR_STOPPED_FOR_DISABLE = False
 
 # ----------------------------------------------------------------------------
 # Logging and small helpers
@@ -100,15 +105,30 @@ def load_interval():
     except Exception:
         return 30
 
-def set_interval(minutes):
+def load_settings():
+    try:
+        with open(SETTINGS) as f:
+            s = json.load(f)
+        return {'interval_minutes': max(1, int(s.get('interval_minutes', 30))),
+                'enabled': bool(s.get('enabled', True))}
+    except Exception:
+        return {'interval_minutes': 30, 'enabled': True}
+
+def save_settings():
     try:
         with open(SETTINGS, 'w') as f:
-            json.dump({'interval_minutes': int(minutes)}, f)
-        log('Interval changed to every ' + str(minutes) + ' minute(s).')
+            json.dump({'interval_minutes': int(INTERVAL_MIN), 'enabled': bool(ENABLED)}, f)
         return True
     except OSError as e:
-        log('WARNING: could not save interval: ' + str(e))
+        log('WARNING: could not save settings: ' + str(e))
         return False
+
+def set_interval(minutes):
+    global INTERVAL_MIN
+    INTERVAL_MIN = int(minutes)
+    ok = save_settings()
+    log('Interval changed to every ' + str(minutes) + ' minute(s).')
+    return ok
 
 def load_history():
     try:
@@ -209,6 +229,36 @@ def extract_ip(body):
         return ip
     except OSError:
         return None
+
+def get_default_ip():
+    # The machine's normal (non-Tor) public IP, fetched DIRECTLY - never via SOCKS
+    for round_no in range(2):
+        for host in ['api.ipify.org', 'ifconfig.me', 'check.torproject.org']:
+            raw = None
+            try:
+                raw = socket.create_connection((host, 443), timeout=6)
+                tls = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+                tls.sendall(('GET / HTTP/1.0\r\nHost: ' + host +
+                             '\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n').encode())
+                chunks = []
+                while True:
+                    data = tls.recv(4096)
+                    if not data:
+                        break
+                    chunks.append(data)
+                ip = extract_ip(b''.join(chunks).decode('utf-8', 'replace').split('\r\n\r\n', 1)[1])
+                if ip:
+                    return ip
+            except Exception as e:
+                log('  default-IP check via ' + host + ' failed: ' + str(e))
+            finally:
+                if raw is not None:
+                    try:
+                        raw.close()
+                    except OSError:
+                        pass
+        time.sleep(3)
+    return None
 
 def get_current_ip():
     # Real exit IP as seen by the internet; fail fast: short timeouts,
@@ -317,7 +367,7 @@ def rotate_until_new(icon):
     # Signal NEWNYM, then keep rotating until the exit IP is one that has
     # NEVER appeared in the history. Returns the fresh IP or None.
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        if STOP_EVENT.is_set():
+        if STOP_EVENT.is_set() or not ENABLED:
             return None
         ensure_tor()
         try:
@@ -381,10 +431,13 @@ def draw_icon(size=256):
 # Tray UI plumbing
 # ----------------------------------------------------------------------------
 def update_title(icon, remaining=None):
-    t = 'Auto IP Changer - IP ' + (CURRENT_IP or 'checking...')
-    if remaining is not None:
-        m, s = divmod(max(0, int(remaining)), 60)
-        t += ' - next change in %d:%02d' % (m, s)
+    if not ENABLED:
+        t = 'Auto IP Changer v' + APP_VERSION + ' - DISABLED - default IP ' + (DEFAULT_IP or 'checking...')
+    else:
+        t = 'Auto IP Changer v' + APP_VERSION + ' - IP ' + (CURRENT_IP or 'checking...')
+        if remaining is not None:
+            m, s = divmod(max(0, int(remaining)), 60)
+            t += ' - next change in %d:%02d' % (m, s)
     try:
         icon.title = t[:127]
     except Exception:
@@ -392,6 +445,18 @@ def update_title(icon, remaining=None):
 
 def on_change_now(icon, item):
     CHANGE_NOW_EVENT.set()
+
+def on_toggle_enabled(icon, item):
+    global ENABLED, CURRENT_IP, NEXT_CHANGE_TS
+    ENABLED = not ENABLED
+    save_settings()
+    if ENABLED:
+        log('Rotation ENABLED from tray menu - Tor will restart and a fresh never-used IP will be picked.')
+        CURRENT_IP = None
+        NEXT_CHANGE_TS = None
+    else:
+        log('Rotation DISABLED from tray menu - switching to the default IP ...')
+        NEXT_CHANGE_TS = None
 
 def make_interval_action(minutes):
     def action(icon, item):
@@ -429,15 +494,28 @@ def build_menu():
         for m in INTERVAL_CHOICES
     ]
     return pystray.Menu(
-        pystray.MenuItem(lambda item: 'Current IP: ' + (CURRENT_IP or 'checking...'), None, enabled=False),
-        pystray.MenuItem(lambda item: _next_change_text(), None, enabled=False),
+        pystray.MenuItem(lambda item: _status_text(), None, enabled=False),
+        pystray.MenuItem(lambda item: _ip_text(), None, enabled=False),
+        pystray.MenuItem(lambda item: _next_change_text(), None, enabled=False,
+                         visible=lambda item: ENABLED),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem('Change IP now', on_change_now),
-        pystray.MenuItem('Interval', pystray.Menu(*interval_items)),
+        pystray.MenuItem(lambda item: 'Disable (use my default IP)' if ENABLED else 'Enable IP rotation',
+                         on_toggle_enabled),
+        pystray.MenuItem('Change IP now', on_change_now, visible=lambda item: ENABLED),
+        pystray.MenuItem('Interval', pystray.Menu(*interval_items), visible=lambda item: ENABLED),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem('Open log folder', on_open_logs),
         pystray.MenuItem('Quit', on_quit),
     )
+
+def _status_text():
+    return ('Status: ENABLED - Tor rotation active' if ENABLED
+            else 'Status: DISABLED - using your default IP')
+
+def _ip_text():
+    if ENABLED:
+        return 'Current IP: ' + (CURRENT_IP or 'checking...')
+    return 'Default IP: ' + (DEFAULT_IP or 'checking...')
 
 def _next_change_text():
     if NEXT_CHANGE_TS is None:
@@ -450,12 +528,42 @@ def _next_change_text():
         return 'Next change in %dh %02dm' % (m // 60, m % 60)
     return 'Next change in %d:%02d' % (m, s)
 
+def interruptible_sleep(seconds):
+    # Sleep that ends immediately when the app is stopped or re-enabled
+    end = time.time() + seconds
+    while time.time() < end and not STOP_EVENT.is_set() and ENABLED:
+        time.sleep(min(1, max(0.05, end - time.time())))
+
 def worker(icon):
-    global CURRENT_IP, NEXT_CHANGE_TS, INTERVAL_MIN
-    log('=== Auto IP Changer (tray) started ===')
+    global CURRENT_IP, NEXT_CHANGE_TS, INTERVAL_MIN, DEFAULT_IP, ENABLED, TOR_STOPPED_FOR_DISABLE
+    settings = load_settings()
+    INTERVAL_MIN = settings['interval_minutes']
+    ENABLED = settings['enabled']  # honor the persisted state at startup
+    log('=== Auto IP Changer v' + APP_VERSION + ' (tray) started ===')
     log('Never-reuse history loaded: ' + str(len(USED)) + ' IP(s) that will never be handed out again')
     update_title(icon)
     while not STOP_EVENT.is_set():
+        if not ENABLED:
+            if not TOR_STOPPED_FOR_DISABLE:
+                log('DISABLED: stopping Tor - traffic now uses the default IP.')
+                stop_tor_gracefully()
+                TOR_STOPPED_FOR_DISABLE = True
+                CURRENT_IP = None
+                NEXT_CHANGE_TS = None
+                _notify(icon, 'Rotation off - using your default IP', 'Auto IP Changer disabled')
+            ip = get_default_ip()
+            if ip:
+                DEFAULT_IP = ip
+                log('Default IP: ' + ip + ' (Tor rotation is off)')
+            update_title(icon)
+            try:
+                with open(CURRENT_FILE, 'w') as f:
+                    f.write((DEFAULT_IP or 'checking...') + '\n')
+            except OSError:
+                pass
+            time.sleep(15)
+            continue
+        TOR_STOPPED_FOR_DISABLE = False
         cycle_start = time.time()
         INTERVAL_MIN = load_interval()
         target = cycle_start + INTERVAL_MIN * 60
@@ -483,20 +591,25 @@ def worker(icon):
                 log('IP CHANGED: ' + str(old) + ' -> ' + new_ip +
                     '  (fresh IP #' + str(len(USED)) + ' in history)')
                 _notify(icon, 'New IP: ' + new_ip, 'IP changed (#' + str(len(USED)) + ' fresh IPs used)')
+            elif not ENABLED:
+                continue
             else:
                 log('WARNING: no never-used IP obtained this cycle; keeping ' + str(old) +
                     ' - retrying in 45 seconds instead of waiting the full interval')
-                CURRENT_IP = CURRENT_IP  # unchanged
-                time.sleep(45)
+                interruptible_sleep(45)
                 continue
         except Exception as e:
+            if not ENABLED:
+                continue
             log('ERROR in cycle: ' + str(e) + ' - retrying in 15 seconds')
-            time.sleep(15)
+            interruptible_sleep(15)
             continue
-        # countdown with live tooltip; exit early on quit or "change now"
+        # countdown with live tooltip; exit early on quit, "change now", or disable
         while not STOP_EVENT.is_set():
             if CHANGE_NOW_EVENT.is_set():
                 CHANGE_NOW_EVENT.clear()
+                break
+            if not ENABLED:
                 break
             remaining = target - time.time()
             if remaining <= 0:

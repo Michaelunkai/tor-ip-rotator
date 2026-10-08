@@ -27,8 +27,13 @@
   Auto IP Changer - IP 185.220.101.15 - next change in 12:34
   ```
 - **Tells you everything**: toast notifications on every IP change, `current_ip.txt` always holds the current IP, and `ip_log.txt` keeps a timestamped history of every rotation.
+- **One-click Disable** 🛑: right-click → *Disable (use my default IP)* stops rotation, shuts Tor down, and shows your **default public IP** in the tooltip, tray menu and `current_ip.txt` for as long as it's off. *Enable IP rotation* brings everything back with a fresh never-used IP.
 - **Fails fast, self-heals**: short timeouts everywhere, verifies Tor's actual control-port replies, kills and restarts Tor if it stops working, retries failed cycles within seconds — the main loop cannot die.
 - **Fights for your privacy baseline**: SOCKS5 on `127.0.0.1:9050`, ControlPort on `127.0.0.1:9051` — local only.
+
+## ⬇️ Download the ready-made exe
+
+Grab **`AutoIpChanger.exe`** from the [**Releases**](https://github.com/Michaelunkai/tor-ip-rotator/releases/latest) page — no build needed. Run the installer step below once, then keep the exe wherever you like.
 
 ## 🚀 Quick start
 
@@ -40,7 +45,8 @@
    It downloads the official [Tor Expert Bundle](https://archive.torproject.org/tor-package-archive/torbrowser/13.5.6/), writes a BOM-free `torrc`, and starts rotating.
 
 2. **Run the tray app**: launch `AutoIpChanger.exe`. That's it — an onion appears in your tray.
-   - **Hover** → current IP + countdown to the next change
+   - **Hover** → current IP + countdown to the next change (or your default IP while disabled)
+   - **Right-click → Disable (use my default IP)** → pause rotation; the tray shows your default IP until you re-enable
    - **Right-click → Change IP now** → immediate rotation
    - **Right-click → Interval** → pick 1 / 5 / 10 / 15 / 30 / 45 / 60 / 90 / 120 minutes
    - **Right-click → Open log folder / Quit**
@@ -82,7 +88,7 @@ python -m PyInstaller --onefile --noconsole --icon=tor_rotator.ico --name AutoIp
 | `used_ips.json` | Every IP ever used — the never-reuse guarantee |
 | `current_ip.txt` | Your current IP, updated continuously |
 | `ip_log.txt` | Timestamped log of every rotation and event |
-| `settings.json` | `{"interval_minutes": 30}` — editable live, applies next cycle |
+| `settings.json` | `{"interval_minutes": 30, "enabled": true}` — editable live, applies next cycle |
 
 Located at `F:\study\projects\IpRotator\runtime\AutoIpChanger-data` (next to the Tor install). The program folder is wiped and rebuilt by `a.ps1`; the data folder never is.
 
