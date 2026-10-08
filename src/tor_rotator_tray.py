@@ -37,8 +37,8 @@ from PIL import Image, ImageDraw
 BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 # Tor + torrc live in the folder created by a.ps1; the data folder (never wiped)
 # sits next to it and holds history, logs and settings.
-DEFAULT_INSTALL_DIR = r'F:\backup\windowsapps\installed\AutoIpChanger'
-DATA_DIR = DEFAULT_INSTALL_DIR + '-data'
+DEFAULT_INSTALL_DIR = r'F:\study\projects\IpRotator\runtime\AutoIpChanger'
+DATA_DIR = r'F:\study\projects\IpRotator\runtime\AutoIpChanger-data'
 TOR_DIR = os.path.join(DEFAULT_INSTALL_DIR, 'tor')
 TOR_EXE = os.path.join(TOR_DIR, 'tor', 'tor.exe')
 TORRC = os.path.join(TOR_DIR, 'torrc')

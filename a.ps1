@@ -20,8 +20,8 @@ data folder's settings.json - the running rotator picks it up on the next cycle.
 
 TARGET INSTALLATION PATH:
 ------------------------
-F:\backup\windowsapps\installed\AutoIpChanger        (program files - wiped on each setup)
-F:\backup\windowsapps\installed\AutoIpChanger-data   (IP history, logs, settings - NEVER wiped,
+F:\study\projects\IpRotator\runtime\AutoIpChanger       (program files - wiped on each setup)
+F:\study\projects\IpRotator\runtime\AutoIpChanger-data  (IP history, logs, settings - NEVER wiped,
                                                       so the never-reuse guarantee survives re-runs)
 
 WHAT THIS SCRIPT EXECUTES STEP-BY-STEP:
@@ -82,8 +82,8 @@ if ($IntervalMinutes -lt 1) {
 }
 
 # Define target paths
-$InstallDir = "F:\backup\windowsapps\installed\AutoIpChanger"
-$StateDir   = "F:\backup\windowsapps\installed\AutoIpChanger-data"
+$InstallDir = "F:\study\projects\IpRotator\runtime\AutoIpChanger"
+$StateDir   = "F:\study\projects\IpRotator\runtime\AutoIpChanger-data"
 $TorDir     = Join-Path $InstallDir "tor"
 
 # ------------------------------------------------------------------------------
@@ -92,8 +92,8 @@ $TorDir     = Join-Path $InstallDir "tor"
 # Stop leftover tor/python instances started by a previous run of this script,
 # otherwise they keep file locks that would make the wipe below fail
 # (matched by install path in the command line, so unrelated processes are safe)
-Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='tor.exe'" |
-    Where-Object { $_.CommandLine -like "*$InstallDir*" } |
+Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='tor.exe' OR Name='AutoIpChanger.exe'" |
+    Where-Object { $_.CommandLine -like "*$InstallDir*" -or $_.Name -eq 'AutoIpChanger.exe' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # Wait until Tor's ports are actually released so the fresh instance can bind them
@@ -568,7 +568,7 @@ exit
 # ------------------------------------------------------------------------------
 # Prefer the tray application when it has been built; fall back to the
 # console launcher otherwise
-$TrayExe = "F:\Downloads\AutoIpChanger.exe"
+$TrayExe = "F:\study\projects\IpRotator\AutoIpChanger.exe"
 if (Test-Path $TrayExe) {
     Start-Process -FilePath $TrayExe
     $StartedWhat = $TrayExe + "  (tray app)"

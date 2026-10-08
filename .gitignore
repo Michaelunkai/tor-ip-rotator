@@ -5,6 +5,12 @@ src/*.spec
 __pycache__/
 *.pyc
 
+# binaries - build them, do not commit them
+*.exe
+
+# local runtime state (tor install + data)
+runtime/
+
 # local data
 *.log
 tor/

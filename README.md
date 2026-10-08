@@ -34,7 +34,7 @@
 
 1. **Install Tor + config** (once): run the bundled installer in PowerShell 5.1+:
    ```powershell
-   .\a.ps1                    # installs to F:\backup\windowsapps\installed\AutoIpChanger
+   .\a.ps1                    # installs to F:\study\projects\IpRotator\runtime\AutoIpChanger
    .\a.ps1 -IntervalMinutes 45   # ...with a custom interval
    ```
    It downloads the official [Tor Expert Bundle](https://archive.torproject.org/tor-package-archive/torbrowser/13.5.6/), writes a BOM-free `torrc`, and starts rotating.
@@ -84,7 +84,7 @@ python -m PyInstaller --onefile --noconsole --icon=tor_rotator.ico --name AutoIp
 | `ip_log.txt` | Timestamped log of every rotation and event |
 | `settings.json` | `{"interval_minutes": 30}` — editable live, applies next cycle |
 
-Located at `F:\backup\windowsapps\installed\AutoIpChanger-data` (next to the Tor install). The program folder is wiped and rebuilt by `a.ps1`; the data folder never is.
+Located at `F:\study\projects\IpRotator\runtime\AutoIpChanger-data` (next to the Tor install). The program folder is wiped and rebuilt by `a.ps1`; the data folder never is.
 
 ## ❓ Troubleshooting
 
