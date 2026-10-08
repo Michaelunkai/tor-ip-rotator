@@ -46,8 +46,9 @@ SETTINGS = os.path.join(DATA_DIR, 'settings.json')
 HISTORY = os.path.join(DATA_DIR, 'used_ips.json')
 LOG_FILE = os.path.join(DATA_DIR, 'ip_log.txt')
 CURRENT_FILE = os.path.join(DATA_DIR, 'current_ip.txt')
+STATUS_FILE = os.path.join(DATA_DIR, 'status.txt')
 
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.2.1'
 
 CONTROL_HOST, CONTROL_PORT = '127.0.0.1', 9051
 SOCKS_HOST, SOCKS_PORT = '127.0.0.1', 9050
@@ -91,6 +92,7 @@ DEFAULT_IP = None
 CURRENT_COUNTRY = None
 DEFAULT_COUNTRY = None
 TOR_STOPPED_FOR_DISABLE = False
+MODE = 'disabled'  # 'disabled' | 'rotating' | 'waiting' - always visible to the user
 
 # ----------------------------------------------------------------------------
 # Logging and small helpers
@@ -485,16 +487,41 @@ def draw_icon(size=256):
 # ----------------------------------------------------------------------------
 # Tray UI plumbing
 # ----------------------------------------------------------------------------
-def update_title(icon, remaining=None):
-    if not ENABLED:
-        t = 'Auto IP Changer v' + APP_VERSION + ' - DISABLED - default IP ' + (DEFAULT_IP or 'checking...')
-    else:
-        t = 'Auto IP Changer v' + APP_VERSION + ' - IP ' + (CURRENT_IP or 'checking...')
-        if remaining is not None:
-            m, s = divmod(max(0, int(remaining)), 60)
-            t += ' - next change in %d:%02d' % (m, s)
+def fmt_countdown(remaining):
+    m, s = divmod(max(0, int(remaining)), 60)
+    return '%d:%02d' % (m, s)
+
+def status_line(remaining=None):
+    # One always-correct status string: current mode, IP, country and the
+    # live time left until the next change - shown in the tooltip, the menu
+    # and status.txt so the user never has to guess what is running
+    if MODE == 'disabled':
+        t = '[MODE: DISABLED] default IP ' + (DEFAULT_IP or 'checking...')
+        if DEFAULT_COUNTRY:
+            t += ' (' + DEFAULT_COUNTRY + ')'
+        return t + ' - rotation is OFF (enable it from the tray menu)'
+    if MODE == 'rotating':
+        t = '[MODE: CHANGING IP NOW] previous IP ' + (CURRENT_IP or 'checking...')
+        if CURRENT_COUNTRY:
+            t += ' (' + CURRENT_COUNTRY + ')'
+        return t + ' - picking a fresh never-used exit...'
+    t = '[MODE: ROTATING every ' + str(INTERVAL_MIN) + ' min] IP ' + (CURRENT_IP or 'checking...')
+    if CURRENT_COUNTRY:
+        t += ' (' + CURRENT_COUNTRY + ')'
+    if remaining is not None:
+        t += ' - next IP in ' + fmt_countdown(remaining) + ' (at ' + datetime.fromtimestamp(time.time() + remaining).strftime('%H:%M:%S') + ')'
+    return t
+
+def write_status_file(remaining=None):
     try:
-        icon.title = t[:127]
+        with open(STATUS_FILE, 'w') as f:
+            f.write(status_line(remaining) + '\n')
+    except OSError:
+        pass
+
+def update_title(icon, remaining=None):
+    try:
+        icon.title = status_line(remaining)[:127]
     except Exception:
         pass
 
@@ -502,16 +529,19 @@ def on_change_now(icon, item):
     CHANGE_NOW_EVENT.set()
 
 def on_toggle_enabled(icon, item):
-    global ENABLED, CURRENT_IP, NEXT_CHANGE_TS
+    global ENABLED, CURRENT_IP, NEXT_CHANGE_TS, MODE
     ENABLED = not ENABLED
     save_settings()
     if ENABLED:
         log('Rotation ENABLED from tray menu - Tor will restart and a fresh never-used IP will be picked.')
         CURRENT_IP = None
         NEXT_CHANGE_TS = None
+        MODE = 'rotating'
     else:
         log('Rotation DISABLED from tray menu - switching to the default IP ...')
         NEXT_CHANGE_TS = None
+        MODE = 'disabled'
+        write_status_file()
 
 def make_interval_action(minutes):
     def action(icon, item):
@@ -564,8 +594,11 @@ def build_menu():
     )
 
 def _status_text():
-    return ('Status: ENABLED - Tor rotation active' if ENABLED
-            else 'Status: DISABLED - using your default IP')
+    if MODE == 'disabled':
+        return 'Mode: DISABLED - using your default IP'
+    if MODE == 'rotating':
+        return 'Mode: CHANGING IP NOW - picking a fresh exit...'
+    return 'Mode: ROTATING - fresh IP every ' + str(INTERVAL_MIN) + ' min'
 
 def _ip_text():
     if ENABLED:
@@ -573,15 +606,14 @@ def _ip_text():
     return 'Default IP: ' + (DEFAULT_IP or 'checking...') + (' (' + DEFAULT_COUNTRY + ')' if DEFAULT_COUNTRY else '')
 
 def _next_change_text():
+    if not ENABLED:
+        return 'Next change: rotation is disabled'
     if NEXT_CHANGE_TS is None:
         return 'Next change: scheduling...'
     remaining = NEXT_CHANGE_TS - time.time()
     if remaining <= 0:
         return 'Next change: any moment now'
-    m, s = divmod(int(remaining), 60)
-    if m >= 60:
-        return 'Next change in %dh %02dm' % (m // 60, m % 60)
-    return 'Next change in %d:%02d' % (m, s)
+    return 'Next change in ' + fmt_countdown(remaining) +            ' (at ' + datetime.fromtimestamp(NEXT_CHANGE_TS).strftime('%H:%M:%S') + ')'
 
 def interruptible_sleep(seconds):
     # Sleep that ends immediately when the app is stopped or re-enabled
@@ -591,7 +623,7 @@ def interruptible_sleep(seconds):
 
 def worker(icon):
     global CURRENT_IP, NEXT_CHANGE_TS, INTERVAL_MIN, DEFAULT_IP, ENABLED, TOR_STOPPED_FOR_DISABLE
-    global CURRENT_COUNTRY, DEFAULT_COUNTRY
+    global CURRENT_COUNTRY, DEFAULT_COUNTRY, MODE
     settings = load_settings()
     INTERVAL_MIN = settings['interval_minutes']
     # SAFETY DEFAULT: every launch starts DISABLED, no matter what the
@@ -603,9 +635,12 @@ def worker(icon):
     log('=== Auto IP Changer v' + APP_VERSION + ' (tray) started ===')
     log('Started DISABLED (safe default): using the default IP - enable rotation from the tray menu.')
     log('Never-reuse history loaded: ' + str(len(USED)) + ' IP(s) that will never be handed out again')
+    MODE = 'disabled'
     update_title(icon)
+    write_status_file()
     while not STOP_EVENT.is_set():
         if not ENABLED:
+            MODE = 'disabled'
             if not TOR_STOPPED_FOR_DISABLE:
                 log('DISABLED: stopping Tor - traffic now uses the default IP.')
                 stop_tor_gracefully()
@@ -624,9 +659,12 @@ def worker(icon):
                     f.write((DEFAULT_IP or 'checking...') + '\n')
             except OSError:
                 pass
+            write_status_file()
             time.sleep(15)
             continue
         TOR_STOPPED_FOR_DISABLE = False
+        MODE = 'rotating'
+        update_title(icon)
         cycle_start = time.time()
         INTERVAL_MIN = load_interval()
         target = cycle_start + INTERVAL_MIN * 60
@@ -653,6 +691,7 @@ def worker(icon):
             if new_ip:
                 CURRENT_IP = new_ip
                 NEXT_CHANGE_TS = target
+                MODE = 'waiting'
                 update_title(icon)
                 log('IP CHANGED: ' + str(old) + ' -> ' + new_ip +
                     (' (' + CURRENT_COUNTRY + ')' if CURRENT_COUNTRY else '') +
@@ -684,6 +723,7 @@ def worker(icon):
             if remaining <= 0:
                 break
             update_title(icon, remaining)
+            write_status_file(remaining)
             try:
                 with open(CURRENT_FILE, 'w') as f:
                     f.write((CURRENT_IP or 'checking...') + '\n')
